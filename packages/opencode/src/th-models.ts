@@ -14,14 +14,17 @@
 export type ThModel = {
   name: string
   cost: { input: number; output: number }
-  limit: { context: number }
+  // `output` = max-output-token budget. The opencode config schema
+  // requires it whenever `limit` is set, so every model MUST include it
+  // — omitting it makes the seeded config invalid and breaks startup.
+  limit: { context: number; output: number }
 }
 
 export const TH_MODELS: Record<string, ThModel> = {
-  "th-orchestra": { name: "TH Orchestra", cost: { input: 1.2, output: 4.5 }, limit: { context: 262144 } },
-  "qwen3.7-max": { name: "Qwen3.7 Max", cost: { input: 1.6, output: 8.0 }, limit: { context: 262144 } },
-  "glm-5.1": { name: "GLM-5.1", cost: { input: 1.4, output: 4.4 }, limit: { context: 131072 } },
-  "deepseek-v4-pro": { name: "DeepSeek V4 Pro", cost: { input: 0.435, output: 0.87 }, limit: { context: 131072 } },
-  "kimi-k2.5": { name: "Kimi K2.5", cost: { input: 0.95, output: 4.0 }, limit: { context: 262144 } },
-  "deepseek-v4-flash": { name: "DeepSeek V4 Flash", cost: { input: 0.14, output: 0.28 }, limit: { context: 1048576 } },
+  "th-orchestra": { name: "TH Orchestra", cost: { input: 1.2, output: 4.5 }, limit: { context: 262144, output: 32768 } },
+  "qwen3.7-max": { name: "Qwen3.7 Max", cost: { input: 1.6, output: 8.0 }, limit: { context: 262144, output: 32768 } },
+  "glm-5.1": { name: "GLM-5.1", cost: { input: 1.4, output: 4.4 }, limit: { context: 131072, output: 32768 } },
+  "deepseek-v4-pro": { name: "DeepSeek V4 Pro", cost: { input: 0.435, output: 0.87 }, limit: { context: 131072, output: 32768 } },
+  "kimi-k2.5": { name: "Kimi K2.5", cost: { input: 0.95, output: 4.0 }, limit: { context: 262144, output: 32768 } },
+  "deepseek-v4-flash": { name: "DeepSeek V4 Flash", cost: { input: 0.14, output: 0.28 }, limit: { context: 1048576, output: 32768 } },
 }

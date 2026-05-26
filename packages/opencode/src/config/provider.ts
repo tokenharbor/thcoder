@@ -39,7 +39,11 @@ export const Model = Schema.Struct({
     Schema.Struct({
       context: Schema.Finite,
       input: Schema.optional(Schema.Finite),
-      output: Schema.Finite,
+      // Optional so a config that only specifies `context` still
+      // validates (the runtime provider supplies a default output
+      // budget). Previously required → any seeded/user config with a
+      // context-only limit failed validation and broke startup.
+      output: Schema.optional(Schema.Finite),
     }),
   ),
   modalities: Schema.optional(
