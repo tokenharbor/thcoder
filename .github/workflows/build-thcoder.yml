@@ -1,0 +1,95 @@
+name: build-thcoder
+
+# Cross-compiles the THcoder standalone binary for every supported
+# platform (Bun can target darwin + windows from a Linux runner) and
+# publishes a GitHub release whose assets the tokenharbor.ai/install
+# one-liner downloads. No Node needed by end users.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/opencode/**"
+      - ".github/workflows/build-thcoder.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install deps
+        run: bun install
+
+      - name: Build all targets
+        working-directory: packages/opencode
+        env:
+          # Pin the displayed version; build.ts otherwise falls back to a
+          # dev-style tag. The user-facing "THcoder vX.Y.Z" comes from
+          # th-version.ts; this is the internal opencode-base version.
+          OPENCODE_VERSION: "0.1.10"
+        run: bun run script/build.ts --skip-embed-web-ui
+
+      - name: Package assets
+        run: |
+          set -euo pipefail
+          cd packages/opencode
+          mkdir -p ../../out
+          pack_tar() { # <dist-target> <asset-os-arch>
+            local d="dist/opencode-$1/bin"
+            [ -f "$d/thcoder" ] || { echo "missing $d/thcoder"; return 1; }
+            chmod +x "$d/thcoder"
+            tar -czf "../../out/thcoder-$2.tar.gz" -C "$d" thcoder
+          }
+          pack_zip() { # <dist-target> <asset-os-arch>
+            local d="dist/opencode-$1/bin"
+            local bin="thcoder.exe"
+            [ -f "$d/$bin" ] || bin="thcoder"
+            [ -f "$d/$bin" ] || { echo "missing windows binary in $d"; return 1; }
+            (cd "$d" && zip -qj "../../../../out/thcoder-$2.zip" "$bin")
+          }
+          pack_tar darwin-arm64 darwin-arm64
+          pack_tar darwin-x64   darwin-x64
+          pack_tar linux-x64    linux-x64
+          pack_tar linux-arm64  linux-arm64
+          pack_zip windows-x64  windows-x64
+          ls -lh ../../out
+
+      - name: Compute tag
+        id: ver
+        run: |
+          v=$(node -p "require('./packages/opencode/package.json').version || '0.1.10'")
+          sha=$(git rev-parse --short HEAD)
+          echo "tag=th-v0.1.10-${sha}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: THcoder 0.1.10 (multi-platform)
+          body: |
+            THcoder standalone binaries, built by GitHub Actions on ${{ github.sha }}.
+            Installed by the tokenharbor.ai/install one-liner.
+
+            Assets:
+              - thcoder-darwin-arm64.tar.gz  — macOS Apple Silicon
+              - thcoder-darwin-x64.tar.gz    — macOS Intel
+              - thcoder-linux-x64.tar.gz     — Linux x86_64
+              - thcoder-linux-arm64.tar.gz   — Linux arm64
+              - thcoder-windows-x64.zip      — Windows x64
+          draft: false
+          prerelease: false
+          make_latest: true
+          files: |
+            out/thcoder-darwin-arm64.tar.gz
+            out/thcoder-darwin-x64.tar.gz
+            out/thcoder-linux-x64.tar.gz
+            out/thcoder-linux-arm64.tar.gz
+            out/thcoder-windows-x64.zip
