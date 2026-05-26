@@ -42,25 +42,26 @@ jobs:
           set -euo pipefail
           cd packages/opencode
           mkdir -p ../../out
+          OUT="$(cd ../../out && pwd)"   # absolute, so subshell cd's can't break the path
           pack_tar() { # <dist-target> <asset-os-arch>
             local d="dist/opencode-$1/bin"
             [ -f "$d/thcoder" ] || { echo "missing $d/thcoder"; return 1; }
             chmod +x "$d/thcoder"
-            tar -czf "../../out/thcoder-$2.tar.gz" -C "$d" thcoder
+            tar -czf "$OUT/thcoder-$2.tar.gz" -C "$d" thcoder
           }
           pack_zip() { # <dist-target> <asset-os-arch>
             local d="dist/opencode-$1/bin"
             local bin="thcoder.exe"
             [ -f "$d/$bin" ] || bin="thcoder"
             [ -f "$d/$bin" ] || { echo "missing windows binary in $d"; return 1; }
-            (cd "$d" && zip -qj "../../../../out/thcoder-$2.zip" "$bin")
+            (cd "$d" && zip -qj "$OUT/thcoder-$2.zip" "$bin")
           }
           pack_tar darwin-arm64 darwin-arm64
           pack_tar darwin-x64   darwin-x64
           pack_tar linux-x64    linux-x64
           pack_tar linux-arm64  linux-arm64
           pack_zip windows-x64  windows-x64
-          ls -lh ../../out
+          ls -lh "$OUT"
 
       - name: Compute tag
         id: ver
