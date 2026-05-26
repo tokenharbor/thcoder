@@ -29,21 +29,35 @@ function keyPath(): string {
   return path.join(os.homedir(), ".thopen", "key")
 }
 
-// opencode's native auth store: ~/.local/share/opencode/auth.json
+// THcoder's native auth store: ~/.local/share/thcoder/auth.json
 // (Global.Path.data/auth.json), shape { [providerID]: { type:"api", key } }.
-// This is where the provider actually reads the key from, so login/logout
-// and the balance/route panels must go through here — not just env/file.
+// This MUST match Global.Path.data (packages/core/src/global.ts `app`), which
+// is where the native provider actually reads the key from — so the write path
+// here and the provider read path resolve to the SAME file. login/logout and
+// the balance/route panels all go through here, not just env/file.
 const TH_PROVIDER_ID = "tokenharbor"
+function dataHome(): string {
+  return process.env["XDG_DATA_HOME"] || path.join(os.homedir(), ".local", "share")
+}
+// Current store — matches Global.Path.data after the "opencode" → "thcoder" rename.
 function authJsonPath(): string {
-  const dataHome = process.env["XDG_DATA_HOME"] || path.join(os.homedir(), ".local", "share")
-  return path.join(dataHome, "opencode", "auth.json")
+  return path.join(dataHome(), "thcoder", "auth.json")
+}
+// Legacy store from when the data dir was "opencode". Read-only fallback so
+// users who logged in before the rename aren't force-logged-out.
+function legacyAuthJsonPath(): string {
+  return path.join(dataHome(), "opencode", "auth.json")
 }
 function readAuthStore(): Record<string, { type?: string; key?: string }> {
-  try {
-    return JSON.parse(fs.readFileSync(authJsonPath(), "utf8")) as Record<string, { type?: string; key?: string }>
-  } catch {
-    return {}
+  for (const p of [authJsonPath(), legacyAuthJsonPath()]) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(p, "utf8")) as Record<string, { type?: string; key?: string }>
+      if (parsed && typeof parsed === "object") return parsed
+    } catch {
+      // try next
+    }
   }
+  return {}
 }
 function writeAuthStore(data: Record<string, unknown>): void {
   const p = authJsonPath()
@@ -52,6 +66,32 @@ function writeAuthStore(data: Record<string, unknown>): void {
     fs.writeFileSync(p, JSON.stringify(data, null, 2), { mode: 0o600 })
   } catch {
     // best effort
+  }
+}
+
+/** One-time forward migration: if the TH key only lives in the legacy
+ *  ~/.local/share/opencode/auth.json but NOT in the new thcoder store, copy
+ *  it forward. The native provider reads ONLY Global.Path.data/auth.json
+ *  (= thcoder after the rename), so without this an old user would look
+ *  "logged in" to the TUI panels while the provider couldn't find the key. */
+function migrateLegacyAuthIfNeeded(): void {
+  let current: Record<string, { type?: string; key?: string }> = {}
+  try {
+    current = JSON.parse(fs.readFileSync(authJsonPath(), "utf8"))
+  } catch {
+    // no current store yet
+  }
+  if (current && current[TH_PROVIDER_ID]?.key) return // already present in new store
+  let legacy: Record<string, { type?: string; key?: string }> = {}
+  try {
+    legacy = JSON.parse(fs.readFileSync(legacyAuthJsonPath(), "utf8"))
+  } catch {
+    return // nothing to migrate
+  }
+  const entry = legacy?.[TH_PROVIDER_ID]
+  if (entry?.type === "api" && entry.key) {
+    const merged = { ...current, [TH_PROVIDER_ID]: entry }
+    writeAuthStore(merged)
   }
 }
 
@@ -169,19 +209,23 @@ async function browserLogin(opts?: { quiet?: boolean }): Promise<string | null> 
   return null
 }
 
-/** Sign out: clear the key from EVERY store — opencode's auth.json
- *  (where the provider actually reads it), ~/.thopen/key, and the env.
- *  After this, thReadKey() returns undefined so the prompt guard blocks
- *  new messages with a "sign in" notice. */
+/** Sign out: clear the key from EVERY store — the native auth.json
+ *  (where the provider actually reads it), the legacy opencode auth.json,
+ *  ~/.thopen/key, and the env. After this, thReadKey() returns undefined so
+ *  the prompt guard blocks new messages with a "sign in" notice. */
 export function thLogout(): void {
-  try {
-    const store = readAuthStore()
-    if (store[TH_PROVIDER_ID]) {
-      delete store[TH_PROVIDER_ID]
-      writeAuthStore(store)
+  // Clear both the current (thcoder) and legacy (opencode) auth stores so a
+  // stale key can't resurrect via the read fallback.
+  for (const p of [authJsonPath(), legacyAuthJsonPath()]) {
+    try {
+      const store = JSON.parse(fs.readFileSync(p, "utf8")) as Record<string, unknown>
+      if (store && typeof store === "object" && store[TH_PROVIDER_ID]) {
+        delete store[TH_PROVIDER_ID]
+        fs.writeFileSync(p, JSON.stringify(store, null, 2), { mode: 0o600 })
+      }
+    } catch {
+      // best effort — store may not exist
     }
-  } catch {
-    // best effort
   }
   try {
     fs.rmSync(keyPath(), { force: true })
@@ -230,6 +274,9 @@ function shouldRunAuth(): boolean {
 }
 
 export async function ensureTokenHarborKey(): Promise<void> {
+  // Forward-migrate any pre-rename key so the native provider (which reads
+  // ONLY the thcoder auth.json) sees it. Runs before we decide to prompt login.
+  migrateLegacyAuthIfNeeded()
   if (process.env.TH_API_KEY) return
   const cached = loadCachedKey()
   if (cached) {
