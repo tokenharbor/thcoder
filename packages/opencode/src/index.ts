@@ -201,6 +201,13 @@ try {
   const { ensureTokenHarborKey } = await import("./th-auth")
   await ensureTokenHarborKey()
 
+  // Startup update check — same clean pre-TUI context as the login above,
+  // so the y/N prompt gets a usable stdin (inside the TUI handler it didn't,
+  // and the check was silently skipped). Self-guarded: TTY + interactive
+  // launch only, all errors swallowed.
+  const { maybePromptUpdate } = await import("./cli/th-update-check")
+  await maybePromptUpdate(args)
+
   if (args.includes("-h") || args.includes("--help")) {
     await cli.parse(args, (err: Error | undefined, _argv: unknown, out: string) => {
       if (err) throw err

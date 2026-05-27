@@ -1,5 +1,4 @@
 import { cmd } from "@/cli/cmd/cmd"
-import { maybePromptUpdate } from "@/cli/th-update-check"
 import { Rpc } from "@/util/rpc"
 import { type rpc } from "./worker"
 import path from "path"
@@ -127,11 +126,6 @@ export const TuiThreadCommand = cmd({
         process.exitCode = 1
         return
       }
-
-      // Startup update check — interactive launches only (skipped for the
-      // one-shot `--prompt` path). Self-contained + fully guarded; never
-      // blocks or breaks startup.
-      if (!args.prompt) await maybePromptUpdate()
 
       // Resolve relative --project paths from PWD, then use the real cwd after
       // chdir so the thread and worker share the same directory key.
