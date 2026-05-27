@@ -56,7 +56,7 @@ import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
 import { eq } from "@/storage/db"
 import * as Database from "@/storage/db"
-import { SessionTable } from "./session.sql"
+import { SessionTable, TodoTable } from "./session.sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
@@ -1242,6 +1242,12 @@ export const layer = Layer.effect(
         const slog = elog.with({ sessionID })
         let structured: unknown
         let step = 0
+        // Todo reconciliation guarantee: how many extra turns we'll force
+        // at end-of-task to make the model finish or correctly close out
+        // any todo left pending/in_progress. Bounded so a model that keeps
+        // ignoring the nudge can't spin forever.
+        const TODO_RECONCILE_MAX = 2
+        let todoReconcileAttempts = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1270,8 +1276,63 @@ export const layer = Layer.effect(
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
-            yield* slog.info("exiting loop")
-            break
+            // Before ending: if the model left any todo pending/in_progress,
+            // force one more turn (bounded by TODO_RECONCILE_MAX) to either
+            // finish the work or set each item's real final status — so a
+            // plan can't silently end half-checked. We push a synthetic
+            // system-reminder onto the current user message (same mechanism
+            // as SessionReminders) and fall through to another model turn
+            // instead of breaking.
+            // Read the session's todos straight from the DB (no Effect
+            // service dependency — keeps SessionPrompt's layer requirements
+            // unchanged).
+            const openTodos = (
+              yield* Effect.sync(() =>
+                Database.use((db) =>
+                  db
+                    .select()
+                    .from(TodoTable)
+                    .where(eq(TodoTable.session_id, sessionID))
+                    .all(),
+                ),
+              )
+            ).filter(
+              (t) => t.status === "pending" || t.status === "in_progress",
+            )
+            if (openTodos.length > 0 && todoReconcileAttempts < TODO_RECONCILE_MAX) {
+              todoReconcileAttempts++
+              const userWithParts = msgs.findLast(
+                (m) => m.info.role === "user" && m.info.id === lastUser.id,
+              )
+              if (userWithParts) {
+                userWithParts.parts.push({
+                  id: PartID.ascending(),
+                  messageID: lastUser.id,
+                  sessionID,
+                  type: "text",
+                  text: [
+                    "<system-reminder>",
+                    "You are about to end, but these todo items are still open:",
+                    ...openTodos.map((t) => `- [${t.status}] ${t.content}`),
+                    "",
+                    "Before finishing: either complete the remaining work now, or — if an item is genuinely done or no longer needed — call the todo tool to set its correct final status (completed / cancelled). Do not leave items pending/in_progress when their work is actually finished. Then you may end.",
+                    "</system-reminder>",
+                  ].join("\n"),
+                  synthetic: true,
+                })
+                yield* slog.info("todo reconcile", {
+                  open: openTodos.length,
+                  attempt: todoReconcileAttempts,
+                })
+                // fall through (no break) → one more model turn
+              } else {
+                yield* slog.info("exiting loop")
+                break
+              }
+            } else {
+              yield* slog.info("exiting loop")
+              break
+            }
           }
 
           step++
