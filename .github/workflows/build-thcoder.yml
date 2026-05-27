@@ -34,7 +34,7 @@ jobs:
           # Pin the displayed version; build.ts otherwise falls back to a
           # dev-style tag. The user-facing "THcoder vX.Y.Z" comes from
           # th-version.ts; this is the internal opencode-base version.
-          OPENCODE_VERSION: "0.1.16"
+          OPENCODE_VERSION: "0.1.17"
         run: bun run script/build.ts --skip-embed-web-ui
 
       - name: Package assets
@@ -68,13 +68,13 @@ jobs:
         run: |
           v=$(node -p "require('./packages/opencode/package.json').version || '0.1.14'")
           sha=$(git rev-parse --short HEAD)
-          echo "tag=th-v0.1.16-${sha}" >> "$GITHUB_OUTPUT"
+          echo "tag=th-v0.1.17-${sha}" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: THcoder 0.1.16 (multi-platform)
+          name: THcoder 0.1.17 (multi-platform)
           body: |
             THcoder standalone binaries, built by GitHub Actions on ${{ github.sha }}.
             Installed by the tokenharbor.ai/install one-liner.
