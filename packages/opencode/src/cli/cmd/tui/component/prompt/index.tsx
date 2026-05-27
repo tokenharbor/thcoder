@@ -386,21 +386,28 @@ export function Prompt(props: PromptProps) {
   createEffect(() => {
     const sessionID = props.sessionID
     const msg = lastUserMessage()
+    // Read the agent list reactively so this effect re-runs once it loads.
+    const agents = local.agent.list()
 
-    if (sessionID !== syncedSessionID) {
-      if (!sessionID || !msg) return
+    if (sessionID === syncedSessionID) return
+    if (!sessionID || !msg) return
 
-      syncedSessionID = sessionID
+    // WAIT (don't latch) until the agent list has actually loaded. On
+    // session resume there's a sync race: the list arrives a tick after the
+    // route mounts, and latching early made us skip restoring a custom
+    // primary (e.g. `yolo`) → it silently fell back to the default (build).
+    // Re-running when `agents` populates lets us restore the real one.
+    if (agents.length === 0) return
 
-      // Only set agent if it's a primary agent (not a subagent)
-      const isPrimaryAgent = local.agent.list().some((x) => x.name === msg.agent)
-      if (msg.agent && isPrimaryAgent) {
-        // Keep command line --agent if specified.
-        if (!args.agent) local.agent.set(msg.agent)
-        if (msg.model) {
-          local.model.set(msg.model)
-          local.model.variant.set(msg.model.variant)
-        }
+    syncedSessionID = sessionID
+
+    // Restore the session's last-used agent when it's a known primary.
+    if (msg.agent && agents.some((x) => x.name === msg.agent)) {
+      // Keep command line --agent if specified.
+      if (!args.agent) local.agent.set(msg.agent)
+      if (msg.model) {
+        local.model.set(msg.model)
+        local.model.variant.set(msg.model.variant)
       }
     }
   })
