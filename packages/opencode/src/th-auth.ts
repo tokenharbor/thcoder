@@ -287,5 +287,18 @@ export async function ensureTokenHarborKey(): Promise<void> {
   const key = await browserLogin()
   if (key) {
     process.env.TH_API_KEY = key
+    // Persist to the native auth store too — the provider (and the TUI's
+    // spawned worker, which may not inherit this env) read the key from
+    // Global.Path.data/auth.json, NOT from env. Writing only env + the
+    // ~/.thopen/key cache left the worker looking "logged out" on first
+    // run, which surfaced opencode's connect-a-provider / paste-API-key
+    // dialog even though browser login had just succeeded. Mirror thLogin.
+    try {
+      const store = readAuthStore()
+      store[TH_PROVIDER_ID] = { type: "api", key }
+      writeAuthStore(store)
+    } catch {
+      // best effort — env + cache file still cover the current process
+    }
   }
 }
