@@ -196,9 +196,22 @@ async function browserLogin(opts?: { quiet?: boolean }): Promise<string | null> 
   let initData: { auth_url?: string; poll_url?: string } = {}
   try {
     // Send a small device payload alongside the label so the dashboard's
-    // THcoder sessions section can show real hostname/os/arch instead of
-    // "Unknown device". Strings only, plain Node `os` module — nothing
-    // privacy-sensitive (no IP, no MAC, no user agent).
+    // THcoder sessions section can show real hostname / friendly OS
+    // instead of "Unknown device". Strings only — no IP / MAC / user
+    // agent. On Linux we also try to read /etc/os-release so the
+    // dashboard can surface the distro name (Ubuntu / Fedora / Debian)
+    // instead of the unhelpful generic "Linux".
+    let distro: string | undefined
+    if (os.platform() === "linux") {
+      try {
+        const rel = fs.readFileSync("/etc/os-release", "utf8")
+        const m = rel.match(/^NAME="?([^"\n]+)"?/m)
+        if (m && m[1]) distro = m[1].trim().slice(0, 80)
+      } catch {
+        // /etc/os-release not present (musl / minimal containers / …) —
+        // we just fall back to generic "Linux" on the dashboard side.
+      }
+    }
     const initRes = await fetch(TH_AUTH_INIT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -210,6 +223,7 @@ async function browserLogin(opts?: { quiet?: boolean }): Promise<string | null> 
           arch: os.arch(),
           platform: os.type(),
           version: THCODE_VERSION,
+          ...(distro ? { distro } : {}),
         },
       }),
     })
