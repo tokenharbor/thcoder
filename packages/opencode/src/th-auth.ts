@@ -25,9 +25,11 @@ import { THCODE_VERSION } from "./th-version"
 const TH_HOMEPAGE = "https://tokenharbor.ai"
 const TH_AUTH_INIT_URL = `${TH_HOMEPAGE}/api/cli/auth/init`
 const TH_VALIDATE_URL = `${TH_HOMEPAGE}/api/cli/balance`
+const TH_LOGOUT_URL = `${TH_HOMEPAGE}/api/cli/logout`
 const POLL_INTERVAL_MS = 2_000
 const POLL_TIMEOUT_MS = 10 * 60 * 1000
 const VALIDATE_TIMEOUT_MS = 5_000
+const LOGOUT_TIMEOUT_MS = 3_000
 
 function keyPath(): string {
   return path.join(os.homedir(), ".thopen", "key")
@@ -271,11 +273,43 @@ async function browserLogin(opts?: { quiet?: boolean }): Promise<string | null> 
   return null
 }
 
-/** Sign out: clear the key from EVERY store — the native auth.json
- *  (where the provider actually reads it), the legacy opencode auth.json,
- *  ~/.thopen/key, and the env. After this, thReadKey() returns undefined so
- *  the prompt guard blocks new messages with a "sign in" notice. */
-export function thLogout(): void {
+/** Best-effort: tell the gateway to revoke the key for THIS device so the
+ *  user_api_keys row disappears from /dashboard/api-keys at the same time
+ *  the local stores are wiped. Short timeout because offline / network
+ *  hiccup must NOT block the local logout — the local cleanup is the
+ *  source of truth from the user's POV, and a stale row can always be
+ *  cleaned up later from the dashboard. */
+async function revokeKeyOnGateway(key: string): Promise<void> {
+  if (!key || !key.startsWith("thk_")) return
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), LOGOUT_TIMEOUT_MS)
+  try {
+    await fetch(TH_LOGOUT_URL, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}` },
+      signal: ctrl.signal,
+    })
+    // We deliberately ignore the response: 200 (revoked), 401 (already
+    // revoked) and 5xx (server hiccup) all lead to the same local action.
+  } catch {
+    // Offline / timeout / DNS — local wipe still proceeds.
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Sign out: revoke the key on the gateway (best-effort) so the dashboard
+ *  session row drops, then clear the key from EVERY local store — the
+ *  native auth.json (where the provider actually reads it), the legacy
+ *  opencode auth.json, ~/.thopen/key, and the env. After this,
+ *  thReadKey() returns undefined so the prompt guard blocks new messages
+ *  with a "sign in" notice. */
+export async function thLogout(): Promise<void> {
+  // Grab the key BEFORE wiping local state — once it's gone we can't
+  // authenticate the revoke call. Read order matches thReadKey().
+  const key = thReadKey()
+  if (key) await revokeKeyOnGateway(key)
+
   // Clear both the current (thcoder) and legacy (opencode) auth stores so a
   // stale key can't resurrect via the read fallback.
   for (const p of [authJsonPath(), legacyAuthJsonPath()]) {
@@ -362,7 +396,7 @@ export async function ensureTokenHarborKey(): Promise<void> {
           "THcoder: previous session was signed out or the key was revoked. Re-authenticating in your browser…\n",
         )
       }
-      thLogout()
+      await thLogout()
     } else {
       // "valid" → trust it; "unknown" → trust the cache, the actual
       // request will surface a real error if the key is genuinely dead.

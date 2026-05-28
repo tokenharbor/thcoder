@@ -489,8 +489,12 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         title: "Sign out of Token Harbor",
         category: "Account",
         slashName: "logout",
-        run: () => {
-          thLogout()
+        run: async () => {
+          // await: thLogout now also tells the gateway to revoke this
+          // device's key so the dashboard session row disappears at the
+          // same time the local stores are wiped. Best-effort (3s
+          // timeout) — offline/timeout falls through to local wipe.
+          await thLogout()
           toast.show({
             message: "Signed out. Run /login or restart thcoder to sign in again.",
             variant: "info",
