@@ -22,8 +22,10 @@ import path from "path"
 
 const TH_HOMEPAGE = "https://tokenharbor.ai"
 const TH_AUTH_INIT_URL = `${TH_HOMEPAGE}/api/cli/auth/init`
+const TH_VALIDATE_URL = `${TH_HOMEPAGE}/api/cli/balance`
 const POLL_INTERVAL_MS = 2_000
 const POLL_TIMEOUT_MS = 10 * 60 * 1000
+const VALIDATE_TIMEOUT_MS = 5_000
 
 function keyPath(): string {
   return path.join(os.homedir(), ".thopen", "key")
@@ -148,6 +150,37 @@ function openInBrowser(url: string): boolean {
     return true
   } catch {
     return false
+  }
+}
+
+// Validate the key against the gateway. We hit /api/cli/balance because
+// it's the lightest auth-gated endpoint we have (one wallet read) and
+// returns 401 on a revoked / unknown key — exactly the signal we need
+// to decide whether to silently continue or force a browser re-auth.
+//
+// Tristate intentionally: a network blip should NOT log the user out.
+//   - "valid"   → key works; proceed.
+//   - "invalid" → key is rejected (401/403, or wrong prefix); re-auth.
+//   - "unknown" → network/server flaked (5xx, timeout, offline); keep
+//                 the cached key and continue.
+async function validateKey(
+  key: string,
+): Promise<"valid" | "invalid" | "unknown"> {
+  if (!key || !key.startsWith("thk_")) return "invalid"
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), VALIDATE_TIMEOUT_MS)
+  try {
+    const r = await fetch(TH_VALIDATE_URL, {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: ctrl.signal,
+    })
+    if (r.ok) return "valid"
+    if (r.status === 401 || r.status === 403) return "invalid"
+    return "unknown"
+  } catch {
+    return "unknown"
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -277,12 +310,40 @@ export async function ensureTokenHarborKey(): Promise<void> {
   // Forward-migrate any pre-rename key so the native provider (which reads
   // ONLY the thcoder auth.json) sees it. Runs before we decide to prompt login.
   migrateLegacyAuthIfNeeded()
-  if (process.env.TH_API_KEY) return
-  const cached = loadCachedKey()
-  if (cached) {
-    process.env.TH_API_KEY = cached
-    return
+
+  // 1. Find whatever key we have locally — env wins, then auth.json (used
+  //    by the native provider + TUI worker), then the ~/.thopen/key cache.
+  const existing = thReadKey()
+
+  // 2. Validate it against the gateway. The previous version trusted the
+  //    cached key without checking, so a user who clicked "Sign out" on
+  //    /dashboard/api-keys would still find their old key sitting on disk
+  //    and the very first request would 401 mid-stream. Validating here
+  //    catches the revoked-key + bad-key cases up front and quietly
+  //    triggers the browser-login flow instead.
+  //
+  //    Network blip / 5xx → "unknown": don't kick the user offline. We
+  //    keep the cached key in env and let the actual upstream call fail
+  //    later if there's really a problem.
+  if (existing) {
+    const status = await validateKey(existing)
+    if (status === "invalid") {
+      if (shouldRunAuth()) {
+        process.stderr.write(
+          "THcoder: previous session was signed out or the key was revoked. Re-authenticating in your browser…\n",
+        )
+      }
+      thLogout()
+    } else {
+      // "valid" → trust it; "unknown" → trust the cache, the actual
+      // request will surface a real error if the key is genuinely dead.
+      process.env.TH_API_KEY = existing
+      return
+    }
   }
+
+  // 3. No usable key (none cached, or the one we had was rejected). Run
+  //    the browser flow, but only on an interactive subcommand.
   if (!shouldRunAuth()) return
   const key = await browserLogin()
   if (key) {
