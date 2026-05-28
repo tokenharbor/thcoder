@@ -25,6 +25,18 @@ jobs:
         with:
           bun-version: 1.3.14
 
+      - name: Read THCODE_VERSION
+        id: thversion
+        # Single source of truth: packages/opencode/src/th-version.ts holds
+        # the user-facing version. Everything downstream (OPENCODE_VERSION
+        # build env, release tag, release name) derives from this so a
+        # version bump only touches one file.
+        run: |
+          v=$(grep -oE 'THCODE_VERSION\s*=\s*"[^"]+"' packages/opencode/src/th-version.ts | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+          [ -n "$v" ] || { echo "could not parse version" >&2; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Resolved THCODE_VERSION = $v"
+
       - name: Install deps
         run: bun install
 
@@ -33,8 +45,8 @@ jobs:
         env:
           # Pin the displayed version; build.ts otherwise falls back to a
           # dev-style tag. The user-facing "THcoder vX.Y.Z" comes from
-          # th-version.ts; this is the internal opencode-base version.
-          OPENCODE_VERSION: "0.1.23"
+          # th-version.ts (read in the previous step).
+          OPENCODE_VERSION: ${{ steps.thversion.outputs.version }}
         run: bun run script/build.ts --skip-embed-web-ui
 
       - name: Package assets
@@ -66,15 +78,14 @@ jobs:
       - name: Compute tag
         id: ver
         run: |
-          v=$(node -p "require('./packages/opencode/package.json').version || '0.1.14'")
           sha=$(git rev-parse --short HEAD)
-          echo "tag=th-v0.1.23-${sha}" >> "$GITHUB_OUTPUT"
+          echo "tag=th-v${{ steps.thversion.outputs.version }}-${sha}" >> "$GITHUB_OUTPUT"
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
-          name: THcoder 0.1.23 (multi-platform)
+          name: THcoder ${{ steps.thversion.outputs.version }} (multi-platform)
           body: |
             THcoder standalone binaries, built by GitHub Actions on ${{ github.sha }}.
             Installed by the tokenharbor.ai/install one-liner.
