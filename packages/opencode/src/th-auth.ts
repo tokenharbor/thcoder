@@ -20,6 +20,8 @@ import fs from "fs"
 import os from "os"
 import path from "path"
 
+import { THCODE_VERSION } from "./th-version"
+
 const TH_HOMEPAGE = "https://tokenharbor.ai"
 const TH_AUTH_INIT_URL = `${TH_HOMEPAGE}/api/cli/auth/init`
 const TH_VALIDATE_URL = `${TH_HOMEPAGE}/api/cli/balance`
@@ -193,10 +195,23 @@ async function browserLogin(opts?: { quiet?: boolean }): Promise<string | null> 
   say("THcoder: starting browser login…\n")
   let initData: { auth_url?: string; poll_url?: string } = {}
   try {
+    // Send a small device payload alongside the label so the dashboard's
+    // THcoder sessions section can show real hostname/os/arch instead of
+    // "Unknown device". Strings only, plain Node `os` module — nothing
+    // privacy-sensitive (no IP, no MAC, no user agent).
     const initRes = await fetch(TH_AUTH_INIT_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ client_label: "thcoder" }),
+      body: JSON.stringify({
+        client_label: "thcoder",
+        device: {
+          hostname: os.hostname(),
+          os: os.platform(),
+          arch: os.arch(),
+          platform: os.type(),
+          version: THCODE_VERSION,
+        },
+      }),
     })
     if (!initRes.ok) throw new Error(`HTTP ${initRes.status}`)
     initData = (await initRes.json()) as typeof initData
